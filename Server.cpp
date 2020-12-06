@@ -11,85 +11,282 @@
 #include <fstream>
 #include <iostream>
 #include <filesystem>
-// #include <ldap.h>
+#include <thread>
+#include <ldap.h>
+#include <mutex>
 
 namespace fs = std::filesystem;
 using namespace std;
 
 #define PORT 5000
+#define LDAP_URI "ldap://ldap.technikum-wien.at:389"
+#define SEARCHBASE "dc=technikum-wien,dc=at"
+#define SCOPE LDAP_SCOPE_SUBTREE
+#define FILTER "(uid=if*b*)"
+#define BIND_USER "" /* anonymous bind with user and pw empty */
+#define BIND_PW ""
+
+std::mutex _listManagerLock;
+std::vector<std::thread> threads;
 
 // splits strings by a certain delimiter
-vector<string> splitByDelimiter(string s, string delimiter)
+vector<string> split(string str, string token, int count)
 {
-    vector<string> splitedArr;
-    uint pos = 0;
-
-    while ((pos = s.find(delimiter)) < s.length())
+    vector<string> result;
+    int i = 0;
+    while (str.size())
     {
-        splitedArr.push_back(s.substr(0, pos));
-        s.erase(0, pos + delimiter.length());
+        if (i < count || count == 0)
+        {
+            int index = str.find(token);
+            if (index != string::npos)
+            {
+                result.push_back(str.substr(0, index));
+                str = str.substr(index + token.size());
+                i++;
+                if (str.size() == 0)
+                    result.push_back(str);
+            }
+            else
+            {
+                result.push_back(str);
+                str = "";
+            }
+        }
+        else
+        {
+            result.push_back(str);
+            break;
+        }
     }
-
-    return splitedArr;
+    return result;
 }
 
+string replaceAll(std::string str, const std::string &from, const std::string &to)
+{
+    size_t start_pos = 0;
+    while ((start_pos = str.find(from, start_pos)) != std::string::npos)
+    {
+        str.replace(start_pos, from.length(), to);
+        start_pos += to.length(); // Handles case where 'to' is a substring of 'from'
+    }
+    return str;
+}
+
+size_t getFilesCount(std::filesystem::path path)
+{
+    using std::filesystem::directory_iterator;
+    return std::distance(directory_iterator(path), directory_iterator{});
+}
+
+// LDAP Login
+bool HandleLogin(string credentials)
+{
+    vector<string> messElements = split(credentials, "\n", NULL);
+
+    LDAP *ld, *ld2;          /* LDAP resource handle */
+    LDAPMessage *result, *e; /* LDAP result handle */
+    BerElement *ber;         /* array of attributes */
+    char *attribute;
+    BerValue **vals;
+
+    BerValue *servercredp;
+    BerValue cred;
+    cred.bv_val = (char *)BIND_PW;
+    cred.bv_len = strlen(BIND_PW);
+    int i, rc = 0;
+    int rc2 = 0;
+
+    const char *attribs[] = {"uid", "cn", NULL}; /* attribute array for search */
+    string uid = "uid=" + messElements[1];
+
+    int ldapversion = LDAP_VERSION3;
+
+    /* setup LDAP connection */
+    if (ldap_initialize(&ld, LDAP_URI) != LDAP_SUCCESS)
+    {
+        fprintf(stderr, "ldap_init failed");
+        return false;
+    }
+
+    printf("connected to LDAP server %s\n", LDAP_URI);
+
+    if ((rc = ldap_set_option(ld, LDAP_OPT_PROTOCOL_VERSION, &ldapversion)) != LDAP_SUCCESS)
+    {
+        fprintf(stderr, "ldap_set_option(PROTOCOL_VERSION): %s\n", ldap_err2string(rc));
+        ldap_unbind_ext_s(ld, NULL, NULL);
+        return false;
+    }
+
+    if ((rc = ldap_start_tls_s(ld, NULL, NULL)) != LDAP_SUCCESS)
+    {
+        fprintf(stderr, "ldap_start_tls_s(): %s\n", ldap_err2string(rc));
+        ldap_unbind_ext_s(ld, NULL, NULL);
+        return false;
+    }
+
+    /* anonymous bind */
+    rc = ldap_sasl_bind_s(ld, BIND_USER, LDAP_SASL_SIMPLE, &cred, NULL, NULL, &servercredp);
+
+    if (rc != LDAP_SUCCESS)
+    {
+        fprintf(stderr, "LDAP bind error: %s\n", ldap_err2string(rc));
+        ldap_unbind_ext_s(ld, NULL, NULL);
+        return false;
+    }
+    else
+    {
+        printf("anonymous bind successful\n");
+    }
+
+    /* perform ldap search */
+    rc = ldap_search_ext_s(ld, SEARCHBASE, SCOPE, uid.c_str(), (char **)attribs, 0, NULL, NULL, NULL, 500, &result);
+
+    if (rc != LDAP_SUCCESS)
+    {
+        fprintf(stderr, "LDAP search error: %s\n", ldap_err2string(rc));
+        ldap_unbind_ext_s(ld, NULL, NULL);
+        return false;
+    }
+
+    printf("Total results: %d\n", ldap_count_entries(ld, result));
+
+    string userDN = "";
+
+    for (e = ldap_first_entry(ld, result); e != NULL; e = ldap_next_entry(ld, e))
+    {
+
+        userDN = ldap_get_dn(ld, e);
+
+        for (attribute = ldap_first_attribute(ld, e, &ber); attribute != NULL; attribute = ldap_next_attribute(ld, e, ber))
+        {
+            if ((vals = ldap_get_values_len(ld, e, attribute)) != NULL)
+            {
+                for (i = 0; i < ldap_count_values_len(vals); i++)
+                {
+                    printf("\t%s: %s\n", attribute, vals[i]->bv_val);
+
+                    /* setup LDAP connection */
+                    if (ldap_initialize(&ld2, LDAP_URI) != LDAP_SUCCESS)
+                    {
+                        fprintf(stderr, "ldap_init failed");
+                        return false;
+                    }
+
+                    printf("connected to LDAP server %s\n", LDAP_URI);
+
+                    if ((rc = ldap_set_option(ld2, LDAP_OPT_PROTOCOL_VERSION, &ldapversion)) != LDAP_SUCCESS)
+                    {
+                        fprintf(stderr, "ldap_set_option(PROTOCOL_VERSION): %s\n", ldap_err2string(rc));
+                        ldap_unbind_ext_s(ld2, NULL, NULL);
+                        return false;
+                    }
+
+                    if ((rc = ldap_start_tls_s(ld2, NULL, NULL)) != LDAP_SUCCESS)
+                    {
+                        fprintf(stderr, "ldap_start_tls_s(): %s\n", ldap_err2string(rc));
+                        ldap_unbind_ext_s(ld2, NULL, NULL);
+                        return false;
+                    }
+
+                    string pwd = messElements[2];
+
+                    cred.bv_val = (char *)pwd.c_str();
+                    cred.bv_len = strlen(pwd.c_str());
+
+                    //TODO: BIND user with password
+                    rc2 = ldap_sasl_bind_s(ld2, userDN.c_str(), LDAP_SASL_SIMPLE, &cred, NULL, NULL, &servercredp);
+
+                    if (rc2 != LDAP_SUCCESS)
+                    {
+                        fprintf(stderr, "LDAP bind error: %s\n", ldap_err2string(rc));
+                        ldap_unbind_ext_s(ld2, NULL, NULL);
+                        ldap_value_free_len(vals);
+                        ldap_memfree(attribute);
+                        ldap_msgfree(result);
+                        ldap_unbind_ext_s(ld, NULL, NULL);
+                        if (ber != NULL)
+                            ber_free(ber, 0);
+                        return false;
+                    }
+                    else
+                    {
+                        printf("bind successful\n");
+                        ldap_value_free_len(vals);
+                        ldap_memfree(attribute);
+                        ldap_msgfree(result);
+                        ldap_unbind_ext_s(ld, NULL, NULL);
+                        if (ber != NULL)
+                            ber_free(ber, 0);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+// Server commands
 void handleCommand(int *clientSocket, char buffer[])
 {
-    ofstream writefile;                                          // To write to the filesystem
-    ifstream readfile;                                           // To read from the filesystem
-    string path = "./Users/";                                    // Default user directory path
-    string request(buffer);                                      // Buffer to string
-    string command = request.substr(0, 5);                       // Getting the command from the request
-    vector<string> requestArr = splitByDelimiter(request, "\n"); // Vector with each line of the request separate
+    ofstream writefile;                                     // To write to the filesystem
+    ifstream readfile;                                      // To read from the filesystem
+    string path = "./Users/";                               // Default user directory path
+    string request(buffer);                                 // Buffer to string
+    string command = request.substr(0, 5);                  // Getting the command from the request
+    vector<string> requestArr = split(request, "\n", NULL); // Vector with each line of the request separate
+    string userPath = path + requestArr[1] + "/";           // Sets the path of the users directory
+    int filesCount = 0;
 
-    if (command == "SEND\n")
+    if (command == "SEND\n") // Sends new mail
     {
-        cout << "[Server][SEND] from user " << requestArr[1] << endl;
-        request.erase(0, 5);
+        cout << "[Server][SEND] from user " << requestArr[1] << endl; // Server output
+        request.erase(0, 5);                                          // Delete the first 5 characters (the SEND)
 
-        writefile.open(path + requestArr[1] + ".txt", ios_base::out | ios_base::app);
-        writefile << request;
-        writefile.close();
+        if (!fs::exists(userPath))          // Check if user repository exists
+            fs::create_directory(userPath); // If not create one
+        else
+            filesCount = getFilesCount(userPath) + 1; // Else get the filecount from the users direcotry
 
-        strcpy(buffer, "");
-        strcpy(buffer, "OK\n");
-        send(*clientSocket, buffer, strlen(buffer), 0);
+        writefile.open(userPath + "/" + to_string(filesCount) + "_" + replaceAll(requestArr[3], " ", "_") + ".txt", ios_base::out); // Create new File (messagenumber_subject.txt)
+        writefile << request;                                                                                                       // Write to file
+        writefile.close();                                                                                                          // Clos file
 
-        requestArr.clear();
+        strcpy(buffer, "");                             // Reset buffer
+        strcpy(buffer, "OK\n");                         // Write to buffer
+        send(*clientSocket, buffer, strlen(buffer), 0); // Send response to client
+
+        requestArr.clear(); // clear array
     }
-    else if (command == "LIST\n")
+    else if (command == "LIST\n") // Lists all mail of a user
     {
-        string line;
-        int index = 1;
-        int count = 0;
+        vector<string> nameArr;
+        string tmpPath;
 
         string message = "ID | TITLE\n";
         message += "----------\n";
 
         cout << "[Server][LIST] from user " << requestArr[1] << endl;
 
-        if (fs::exists(path + requestArr[1] + ".txt"))
+        if (fs::exists(userPath)) // Check if uer directory exists
         {
-            readfile.open(path + requestArr[1] + ".txt");
-            while (getline(readfile, line))
+            filesCount = getFilesCount(userPath);
+            for (const auto &file : fs::directory_iterator(userPath)) // Interate through the directory
             {
-                if (index == 3)
-                {
-                    count++;
-                    message += to_string(count) + "  | " + line + "\n";
-                }
-
-                index++;
-
-                if (line == ".")
-                    index = 1;
+                tmpPath = file.path();                             // Gets the whole path
+                tmpPath.erase(0, userPath.length());               // Gets the filename
+                tmpPath.resize(tmpPath.length() - 4);              // Gets rid of the .txt
+                nameArr = split(tmpPath, "_", 1);                  // Spliting the filename on '_' only once
+                message += nameArr[0] + " | " + nameArr[1] + "\n"; // Builds the message
             }
 
-            string countStr = "\nCOUNT: " + to_string(count) + "\n";
-            message.insert(0, countStr);
-            strcpy(buffer, "");
-            strcpy(buffer, message.c_str());
-            send(*clientSocket, buffer, strlen(buffer), 0);
+            string countStr = "\nCOUNT: " + to_string(filesCount) + "\n"; // Build the first line of the response (count)
+            message.insert(0, countStr);                                  // Insert the emails count at the beginning of the message
+            strcpy(buffer, "");                                           // Reset buffer
+            strcpy(buffer, message.c_str());                              // Write message to buffer
+            send(*clientSocket, buffer, strlen(buffer), 0);               // Send response to client
         }
         else
         {
@@ -98,38 +295,50 @@ void handleCommand(int *clientSocket, char buffer[])
             send(*clientSocket, buffer, strlen(buffer), 0);
         }
     }
-    else if (command == "READ\n")
+    else if (command == "READ\n") // Reads a email (mail number)
     {
-        string line, message;
-        int lineIndex = 1, messageIndex = 1;
-
+        vector<string> pathArr;
+        string message, tmpPath, line;
+        size_t found;
+        int lineIndex = 1;
         cout << "[Server][READ] from user " << requestArr[1] << endl;
 
-        if (fs::exists(path + requestArr[1] + ".txt"))
+        if (fs::exists(userPath)) // Check if uer directory exists
         {
-            readfile.open(path + requestArr[1] + ".txt");
-
-            while (true)
+            for (const auto &file : fs::directory_iterator(userPath)) // Interate through the directory
             {
-                if (line == ".")
-                    messageIndex++;
+                tmpPath = file.path();                  // Gets the whole path
+                pathArr = split(tmpPath, "/", NULL);    // Splits the path on '/'
+                found = pathArr[3].find(requestArr[2]); // Searchers for the message number in the filname
 
-                if (messageIndex == std::stoi(requestArr[2]))
+                if (found != string::npos && found == 0) // Checks if message number was found and if it is on the first position
                 {
-                    while (lineIndex != 4 && getline(readfile, line))
+                    readfile.open(tmpPath); // Opens the file
+
+                    while (getline(readfile, line)) // reads the files
+                    {
+                        if (lineIndex == 4) // Checks if it is the right line
+                        {
+                            message += line; // builds the message
+                            break;
+                        }
                         lineIndex++;
-
-                    getline(readfile, message);
-                    line.clear();
-                    break;
+                    }
                 }
-
-                getline(readfile, line);
             }
 
-            strcpy(buffer, "");
-            strcpy(buffer, message.c_str());
-            send(*clientSocket, buffer, strlen(buffer), 0);
+            if (message == "") // Checks if massage is empty
+            {
+                strcpy(buffer, "");
+                strcpy(buffer, "ERR\n");
+                send(*clientSocket, buffer, strlen(buffer), 0);
+            }
+            else
+            {
+                strcpy(buffer, "");
+                strcpy(buffer, message.c_str());
+                send(*clientSocket, buffer, strlen(buffer), 0);
+            }
         }
         else
         {
@@ -138,40 +347,43 @@ void handleCommand(int *clientSocket, char buffer[])
             send(*clientSocket, buffer, strlen(buffer), 0);
         }
     }
-    else if (command.substr(0, 4) == "DEL\n")
+    else if (command.substr(0, 4) == "DEL\n") // deletes a email (mail number)
     {
-        string line;
-        string openFilePath = path + requestArr[1] + ".txt";
-        string writeFilePath = path + requestArr[1] + "_tmp.txt";
-        int messageIndex = 1;
-
+        vector<string> pathArr;
+        string tmpPath, line;
+        size_t found;
+        bool removed = false;
+        int lineIndex = 1;
         cout << "[Server][DEL] from user " << requestArr[1] << endl;
 
-        if (fs::exists(openFilePath))
+        if (fs::exists(userPath)) // Check if uer directory exists
         {
-            readfile.open(openFilePath);
-            writefile.open(writeFilePath);
-            
-            while (getline(readfile, line))
+            for (const auto &file : fs::directory_iterator(userPath)) // Interate through the directory
             {
-                if (messageIndex != std::stoi(requestArr[2]))
+                tmpPath = file.path();                  // Gets the whole path
+                pathArr = split(tmpPath, "/", NULL);    // Splits the path on '/'
+                found = pathArr[3].find(requestArr[2]); // Searchers for the message number in the filname
+
+                if (found != string::npos && found == 0) // Checks if message number was found and if it is on the first position
                 {
-                    writefile << line + "\n";
+                    remove(tmpPath.c_str());
+                    removed = true;
+                    break;
                 }
-
-                if (line == ".")
-                    messageIndex++;
             }
-            
-            readfile.close();
-            writefile.close();
 
-            remove(openFilePath.c_str());
-            rename(writeFilePath.c_str(), openFilePath.c_str());
-
-            strcpy(buffer, "");
-            strcpy(buffer, "OK\n");
-            send(*clientSocket, buffer, strlen(buffer), 0);
+            if (removed == false) // Checks if massage is empty
+            {
+                strcpy(buffer, "");
+                strcpy(buffer, "ERR\n");
+                send(*clientSocket, buffer, strlen(buffer), 0);
+            }
+            else
+            {
+                strcpy(buffer, "");
+                strcpy(buffer, "OK\n");
+                send(*clientSocket, buffer, strlen(buffer), 0);
+            }
         }
         else
         {
@@ -180,6 +392,42 @@ void handleCommand(int *clientSocket, char buffer[])
             send(*clientSocket, buffer, strlen(buffer), 0);
         }
     }
+}
+
+void handleClient(int clientSocket, char buffer[], string clientIp)
+{
+    string request;
+    int size;
+    bool loggedIn = false;
+
+    do
+    {
+        size = recv(clientSocket, buffer, sizeof(buffer), 0);
+        if (size > 0)
+        {
+            if (!loggedIn)
+            {
+                /* code */
+            }
+            
+        }
+        else if (size == 0)
+        {
+            cout << "Client: " << clientIp << " closed the connection \n" << endl;
+            break;
+        }
+        else
+        {
+            perror("Error while receiving ");
+            break;
+        }
+
+    } while (strncmp(buffer, "quit", 4) != 0);
+
+    close(clientSocket);
+    free(buffer);
+    free(&request);
+    free(&size);
 }
 
 int main(int argc, char **argv)
@@ -188,8 +436,9 @@ int main(int argc, char **argv)
 
     // Variables
     int listeningSocket, clientSocket;
-    char buffer[1024];
     int opt = 1;
+    char buffer[1024];
+    string clientIp;
     sockaddr_in listeningSocketAddress, clientAddress;
     socklen_t clientAddressLength = sizeof(clientAddress);
 
@@ -226,6 +475,12 @@ int main(int argc, char **argv)
     }
 
     printf("[Server] Server is listening on PORT: %d \n", ntohs(listeningSocketAddress.sin_port));
+    bool loginSuccessfull = false;
+
+    // Welcome message
+    string message = "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+    message += "~~~~~~~~~~Hello to my mail server~~~~~~~~~~\n";
+    message += "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
 
     // Start accepting clients
     while (true)
@@ -239,26 +494,24 @@ int main(int argc, char **argv)
 
         printf("[Server][Connection Accepted] Client connected from %s:%d... \n", inet_ntoa(clientAddress.sin_addr), ntohs(clientAddress.sin_port));
 
-        // Welcome message
-        string message = "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
-        message += "~~~~~~~~~~Hello to my mail server~~~~~~~~~~\n";
-        message += "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
-        message += "Those are valid commands that you can use\n";
-        message += "SEND, LIST, READ, DEL, QUIT \n";
+        clientIp += inet_ntoa(clientAddress.sin_addr);        // Get the clientIp
+        clientIp += ":";                                      // Seperator
+        clientIp += to_string(ntohs(clientAddress.sin_port)); // Get the client port
 
         strcpy(buffer, message.c_str());               // Fill the buffer with the welcome message
         send(clientSocket, buffer, strlen(buffer), 0); // Send the welcome message to the client
 
-        while (true)
-        {
-            memset(buffer, 0, sizeof(buffer));             // Reset the buffer
-            recv(clientSocket, buffer, sizeof(buffer), 0); // Recives a request from the client
+        threads.push_back(thread(handleClient, clientSocket, buffer, clientIp));
 
-            handleCommand(&clientSocket, buffer); //handles the requests
-        }
+        memset(buffer, 0, sizeof(buffer)); // Reset the buffer
 
         clientSocket = 0;
     }
 
+    free(&listeningSocket);
+    free(&clientSocket);
+    free(&buffer);
+    free(&clientIp);
+    free(&message);
     close(listeningSocket);
 }

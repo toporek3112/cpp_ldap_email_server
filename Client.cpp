@@ -32,25 +32,72 @@ string getLineCustom(int min, int max)
         }
         else
         {
-            input += "\n";
             return input;
             continue;
         }
     }
 }
 
+string LDAPLogin(int *clientSocket)
+{
+    while (true)
+    {
+        string username, password, message, response;
+        char buffer[1024];
+        int size = 0;
+
+        cout << "Username: ";
+        username = getLineCustom(1, 8);
+        password.assign(getpass("Password: "));
+        // password.assign(getpass("Password: \n"));
+
+        message += "LOGIN\n";
+        message += username + "\n" + password;
+        strcpy(buffer, message.c_str());               
+        send(*clientSocket, buffer, strlen(buffer), 0);
+
+        strcpy(buffer, "");
+        recv(*clientSocket, buffer, sizeof(buffer), 0);
+
+        if (size > 0)
+            cout << buffer << endl;
+        else if (size == 0)
+        {
+            printf("Connection closed\n");
+            close(*clientSocket);
+            exit(EXIT_FAILURE);
+        }
+
+        response.clear();
+        response = buffer;
+
+        if (response == "OK" || response == "OK\n")
+        {
+            cout << "Login successful!\n"
+                 << endl;
+            return username;
+        }
+        else
+        {
+            cout << "Login unsuccessful!\n"
+                 << endl;
+            return "QUIT";
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
-    int clinetSocket, size;
+    int clientSocket, size;
     char buffer[1024];
     sockaddr_in serverAddress;
 
-    string username = "if20b039";
+    string username = "";
     string input = "";
     string message = "";
 
     // Create a socket
-    if ((clinetSocket = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) == -1)
     {
         perror("[Client] Someting went wrong creating Socket");
         exit(EXIT_FAILURE);
@@ -61,25 +108,51 @@ int main(int argc, char **argv)
     serverAddress.sin_addr.s_addr = inet_addr("127.0.0.1"); // Set IP address (localhost)
     serverAddress.sin_port = htons(PORT);                   // Set port to use (network byte order)
 
-    strcpy(buffer, "");
-
     // Connect
-    if (connect(clinetSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) == 0)
     {
-        cout << "[Client] Connection with server " << inet_ntoa(serverAddress.sin_addr) << " established" << endl;
-        size = recv(clinetSocket, buffer, sizeof(buffer), 0);
-        if (size > 0)
+        if (connect(clientSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) == 0)
         {
-            printf("Bytes received: %d\n \n", size);
-            cout << buffer << endl;
+            cout << "[Client] Connection with server " << inet_ntoa(serverAddress.sin_addr) << " established" << endl;
+            size = recv(clientSocket, buffer, sizeof(buffer), 0);
+
+            if (size > 0)
+                cout << buffer << endl;
+            else if (size == 0)
+            {
+                printf("Connection closed\n");
+                close(clientSocket);
+                exit(EXIT_FAILURE);
+            }
         }
-        else if (size == 0)
-            printf("Connection closed\n");
+        else
+        {
+            perror("[Client] Something went wrong while connecting");
+            close(clientSocket);
+            exit(EXIT_FAILURE);
+        }
     }
-    else
+
+    // strcpy(buffer, "");
+    // strcpy(buffer, "Hello There");
+    // send(clientSocket, buffer, strlen(buffer), 0);
+
+    // LDAP login
+    for (size_t i = 3; i > 0; i--)
     {
-        perror("[Client] Something went wrong while connecting");
-        exit(EXIT_FAILURE);
+        username.clear();
+        username = LDAPLogin(&clientSocket);
+        if (username == "QUIT")
+        {
+            if (i == 1)
+            {
+                cout << "Too many failed attempts, program will now close!" << endl;
+                close(clientSocket);
+                return EXIT_FAILURE;
+            }
+            cout << "login failed try again, attempts left: " << i - 1 << endl;
+            continue;
+        }
+        break;
     }
 
     // reading and sending commands in while loop
@@ -89,7 +162,7 @@ int main(int argc, char **argv)
         input.clear();
         memset(buffer, 0, sizeof(buffer)); // Reseting buffer
 
-        printf("> "); 
+        printf("> ");
         getline(cin, message); // Read Command
 
         transform(message.begin(), message.end(), message.begin(), ::toupper); // Commands to Upper
@@ -114,11 +187,11 @@ int main(int argc, char **argv)
             message += input;
             message += "\n.\n";
 
-            strcpy(buffer, message.c_str()); // Writing Message to buffer
-            send(clinetSocket, buffer, strlen(buffer), 0); // Sending buffer (message) to server
+            strcpy(buffer, message.c_str());               // Writing Message to buffer
+            send(clientSocket, buffer, strlen(buffer), 0); // Sending buffer (message) to server
 
-            memset(buffer, 0, sizeof(buffer)); // Reseting buffer
-            recv(clinetSocket, buffer, sizeof(buffer), 0); // Receiving response from server 
+            memset(buffer, 0, sizeof(buffer));             // Reseting buffer
+            recv(clientSocket, buffer, sizeof(buffer), 0); // Receiving response from server
 
             cout << buffer << endl;
         }
@@ -130,10 +203,10 @@ int main(int argc, char **argv)
             message += ".\n";
 
             strcpy(buffer, message.c_str());
-            send(clinetSocket, buffer, strlen(buffer), 0); // Sending buffer (message) to server
+            send(clientSocket, buffer, strlen(buffer), 0); // Sending buffer (message) to server
 
-            memset(buffer, 0, sizeof(buffer)); // Reseting buffer
-            recv(clinetSocket, buffer, sizeof(buffer), 0); // Receiving response from server 
+            memset(buffer, 0, sizeof(buffer));             // Reseting buffer
+            recv(clientSocket, buffer, sizeof(buffer), 0); // Receiving response from server
 
             cout << buffer << endl;
         }
@@ -149,10 +222,10 @@ int main(int argc, char **argv)
             message += "\n.\n";
 
             strcpy(buffer, message.c_str());
-            send(clinetSocket, buffer, strlen(buffer), 0); // Sending buffer (message) to server
+            send(clientSocket, buffer, strlen(buffer), 0); // Sending buffer (message) to server
 
-            memset(buffer, 0, sizeof(buffer)); // Reseting buffer
-            recv(clinetSocket, buffer, sizeof(buffer), 0); // Receiving response from server 
+            memset(buffer, 0, sizeof(buffer));             // Reseting buffer
+            recv(clientSocket, buffer, sizeof(buffer), 0); // Receiving response from server
 
             cout << "\ntext:" << endl;
             cout << buffer << endl;
@@ -170,10 +243,10 @@ int main(int argc, char **argv)
             message += "\n.\n";
 
             strcpy(buffer, message.c_str());
-            send(clinetSocket, buffer, strlen(buffer), 0); // Sending buffer (message) to server
+            send(clientSocket, buffer, strlen(buffer), 0); // Sending buffer (message) to server
 
-            memset(buffer, 0, sizeof(buffer)); // Reseting buffer
-            recv(clinetSocket, buffer, sizeof(buffer), 0); // Receiving response from server 
+            memset(buffer, 0, sizeof(buffer));             // Reseting buffer
+            recv(clientSocket, buffer, sizeof(buffer), 0); // Receiving response from server
 
             cout << buffer << endl;
         }
@@ -184,6 +257,6 @@ int main(int argc, char **argv)
     }
 
     cout << "\n Goodbye :)" << endl;
-    close(clinetSocket);
+    close(clientSocket);
     return 0;
 }
