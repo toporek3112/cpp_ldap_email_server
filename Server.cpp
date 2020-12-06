@@ -26,6 +26,8 @@ using namespace std;
 #define BIND_USER "" /* anonymous bind with user and pw empty */
 #define BIND_PW ""
 
+#define BUF 1024
+
 std::mutex _listManagerLock;
 std::vector<std::thread> threads;
 
@@ -394,26 +396,40 @@ void handleCommand(int *clientSocket, char buffer[])
     }
 }
 
-void handleClient(int clientSocket, char buffer[], string clientIp)
+void handleClient(int clientSocket, string clientIp)
 {
     string request;
+    char buffer[BUF];
     int size;
     bool loggedIn = false;
 
     do
     {
-        size = recv(clientSocket, buffer, sizeof(buffer), 0);
+        size = recv(clientSocket, buffer, BUF, 0);
         if (size > 0)
         {
+            cout << buffer << endl;
             if (!loggedIn)
             {
-                /* code */
+                loggedIn = HandleLogin(buffer);
+
+                memset(buffer, 0, sizeof(buffer)); // Rest buffer
+                if (loggedIn)
+                {
+                    strcpy(buffer, "OK\n");
+                    send(clientSocket, buffer, strlen(buffer), 0);
+                }
+                else
+                {
+                    strcpy(buffer, "ERR\n");
+                    send(clientSocket, buffer, strlen(buffer), 0);
+                }
             }
-            
         }
         else if (size == 0)
         {
-            cout << "Client: " << clientIp << " closed the connection \n" << endl;
+            cout << "Client: " << clientIp << " closed the connection \n"
+                 << endl;
             break;
         }
         else
@@ -425,9 +441,6 @@ void handleClient(int clientSocket, char buffer[], string clientIp)
     } while (strncmp(buffer, "quit", 4) != 0);
 
     close(clientSocket);
-    free(buffer);
-    free(&request);
-    free(&size);
 }
 
 int main(int argc, char **argv)
@@ -437,7 +450,7 @@ int main(int argc, char **argv)
     // Variables
     int listeningSocket, clientSocket;
     int opt = 1;
-    char buffer[1024];
+    char buffer[BUF];
     string clientIp;
     sockaddr_in listeningSocketAddress, clientAddress;
     socklen_t clientAddressLength = sizeof(clientAddress);
@@ -475,7 +488,6 @@ int main(int argc, char **argv)
     }
 
     printf("[Server] Server is listening on PORT: %d \n", ntohs(listeningSocketAddress.sin_port));
-    bool loginSuccessfull = false;
 
     // Welcome message
     string message = "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
@@ -501,17 +513,16 @@ int main(int argc, char **argv)
         strcpy(buffer, message.c_str());               // Fill the buffer with the welcome message
         send(clientSocket, buffer, strlen(buffer), 0); // Send the welcome message to the client
 
-        threads.push_back(thread(handleClient, clientSocket, buffer, clientIp));
-
-        memset(buffer, 0, sizeof(buffer)); // Reset the buffer
+        memset(buffer, 0, sizeof(buffer));    // Reset the buffer
+        handleClient(clientSocket, clientIp); // Replace with tread
 
         clientSocket = 0;
     }
 
-    free(&listeningSocket);
-    free(&clientSocket);
-    free(&buffer);
-    free(&clientIp);
-    free(&message);
+    // free(&listeningSocket);
+    // free(&clientSocket);
+    // free(&buffer);
+    // free(&clientIp);
+    // free(&message);
     close(listeningSocket);
 }

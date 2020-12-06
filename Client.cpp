@@ -12,6 +12,7 @@
 using namespace std;
 
 #define PORT 5000
+#define BUF 1024
 
 string getLineCustom(int min, int max)
 {
@@ -38,30 +39,29 @@ string getLineCustom(int min, int max)
     }
 }
 
-string LDAPLogin(int *clientSocket)
+bool LDAPLogin(int *clientSocket)
 {
     while (true)
     {
         string username, password, message, response;
-        char buffer[1024];
+        char buffer[BUF];
         int size = 0;
 
-        cout << "Username: ";
+        std::cout << "Username: ";
         username = getLineCustom(1, 8);
         password.assign(getpass("Password: "));
         // password.assign(getpass("Password: \n"));
 
         message += "LOGIN\n";
-        message += username + "\n" + password;
-        strcpy(buffer, message.c_str());               
+        message += username + "\n" + password + "\n";
+
+        strcpy(buffer, message.c_str());
         send(*clientSocket, buffer, strlen(buffer), 0);
 
-        strcpy(buffer, "");
-        recv(*clientSocket, buffer, sizeof(buffer), 0);
+        memset(buffer, 0, sizeof(buffer));
+        size = recv(*clientSocket, buffer, sizeof(buffer), 0);
 
-        if (size > 0)
-            cout << buffer << endl;
-        else if (size == 0)
+        if (size == 0)
         {
             printf("Connection closed\n");
             close(*clientSocket);
@@ -71,17 +71,17 @@ string LDAPLogin(int *clientSocket)
         response.clear();
         response = buffer;
 
-        if (response == "OK" || response == "OK\n")
+        if (response == "OK\n")
         {
-            cout << "Login successful!\n"
-                 << endl;
-            return username;
+            std::cout << "Login successful!\n"
+                      << endl;
+            return true;
         }
         else
         {
-            cout << "Login unsuccessful!\n"
-                 << endl;
-            return "QUIT";
+            std::cout << "Login unsuccessful!\n"
+                      << endl;
+            return false;
         }
     }
 }
@@ -89,12 +89,12 @@ string LDAPLogin(int *clientSocket)
 int main(int argc, char **argv)
 {
     int clientSocket, size;
-    char buffer[1024];
+    char buffer[BUF];
     sockaddr_in serverAddress;
 
-    string username = "";
     string input = "";
     string message = "";
+    bool loggedIn = false;
 
     // Create a socket
     if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) == -1)
@@ -112,11 +112,11 @@ int main(int argc, char **argv)
     {
         if (connect(clientSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) == 0)
         {
-            cout << "[Client] Connection with server " << inet_ntoa(serverAddress.sin_addr) << " established" << endl;
+            std::cout << "[Client] Connection with server " << inet_ntoa(serverAddress.sin_addr) << " established" << endl;
             size = recv(clientSocket, buffer, sizeof(buffer), 0);
 
             if (size > 0)
-                cout << buffer << endl;
+                std::cout << buffer << endl;
             else if (size == 0)
             {
                 printf("Connection closed\n");
@@ -139,17 +139,16 @@ int main(int argc, char **argv)
     // LDAP login
     for (size_t i = 3; i > 0; i--)
     {
-        username.clear();
-        username = LDAPLogin(&clientSocket);
-        if (username == "QUIT")
+        loggedIn = LDAPLogin(&clientSocket);
+        if (loggedIn == false)
         {
             if (i == 1)
             {
-                cout << "Too many failed attempts, program will now close!" << endl;
+                std::cout << "Too many failed attempts, program will now close!" << endl;
                 close(clientSocket);
                 return EXIT_FAILURE;
             }
-            cout << "login failed try again, attempts left: " << i - 1 << endl;
+            std::cout << "login failed try again, attempts left: " << i - 1 << endl;
             continue;
         }
         break;
@@ -252,11 +251,11 @@ int main(int argc, char **argv)
         }
         else
         {
-            cout << "Invalid Command" << endl;
+            std::cout << "Invalid Command" << endl;
         }
     }
 
-    cout << "\n Goodbye :)" << endl;
+    std::cout << "\n Goodbye :)" << endl;
     close(clientSocket);
     return 0;
 }
