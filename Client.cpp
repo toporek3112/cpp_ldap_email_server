@@ -39,7 +39,7 @@ string getLineCustom(int min, int max)
     }
 }
 
-bool LDAPLogin(int *clientSocket)
+string LDAPLogin(int *clientSocket)
 {
     while (true)
     {
@@ -75,13 +75,13 @@ bool LDAPLogin(int *clientSocket)
         {
             std::cout << "Login successful!\n"
                       << endl;
-            return true;
+            return username;
         }
         else
         {
             std::cout << "Login unsuccessful!\n"
                       << endl;
-            return false;
+            return "ERR";
         }
     }
 }
@@ -92,9 +92,7 @@ int main(int argc, char **argv)
     char buffer[BUF];
     sockaddr_in serverAddress;
 
-    string input = "";
-    string message = "";
-    bool loggedIn = false;
+    string input, message, username;;
 
     // Create a socket
     if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) == -1)
@@ -132,15 +130,11 @@ int main(int argc, char **argv)
         }
     }
 
-    // strcpy(buffer, "");
-    // strcpy(buffer, "Hello There");
-    // send(clientSocket, buffer, strlen(buffer), 0);
-
     // LDAP login
     for (size_t i = 3; i > 0; i--)
     {
-        loggedIn = LDAPLogin(&clientSocket);
-        if (loggedIn == false)
+        username = LDAPLogin(&clientSocket);
+        if (username == "ERR")
         {
             if (i == 1)
             {
@@ -153,6 +147,17 @@ int main(int argc, char **argv)
         }
         break;
     }
+
+    string commands = "----------------------------------------\n";
+    commands += "Commands you can use:\n";
+    commands += "SEND          Send a new email to someone\n";
+    commands += "LIST          List all your emails\n";
+    commands += "READ          Read a certain email\n";
+    commands += "DEL           Delete a certain email\n";
+    commands += "QUIT          Pretty selfexplaining...\n";
+
+    cout << commands << endl;
+
 
     // reading and sending commands in while loop
     while (true)
@@ -168,18 +173,21 @@ int main(int argc, char **argv)
 
         if (message == "QUIT")
             break;
+        if (message == "HELP")
+            cout << commands << endl;      
         else if (message == "SEND") // Send Command
         {
             // Building Message
             message += "\n";
-            cout << "Enter sender (max 8 characters):" << endl;
-            message += getLineCustom(8, 8);
+            message += username + "\n";
 
             cout << "Enter receiver (max 8 characters):" << endl;
             message += getLineCustom(8, 8);
+            message += "\n";
 
             cout << "Enter subject (max 80 characters):" << endl;
             message += getLineCustom(3, 80);
+            message += "\n";
 
             cout << "Enter message:" << endl;
             getline(cin, input);
@@ -197,8 +205,7 @@ int main(int argc, char **argv)
         else if (message == "LIST")
         {
             message += "\n";
-            cout << "Enter username (max 8 characters):" << endl;
-            message += getLineCustom(8, 8);
+            message += username + "\n";
             message += ".\n";
 
             strcpy(buffer, message.c_str());
@@ -212,8 +219,7 @@ int main(int argc, char **argv)
         else if (message == "READ")
         {
             message += "\n";
-            cout << "Enter username (max 8 characters):" << endl;
-            message += getLineCustom(8, 8);
+            message += username + "\n";
 
             cout << "Enter message number:" << endl;
             getline(cin, input);
@@ -233,8 +239,7 @@ int main(int argc, char **argv)
         else if (message == "DEL")
         {
             message += "\n";
-            cout << "Enter username (max 8 characters):" << endl;
-            message += getLineCustom(8, 8);
+            message += username + "\n";
 
             cout << "Enter message number:" << endl;
             getline(cin, input);

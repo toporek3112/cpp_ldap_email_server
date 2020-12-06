@@ -77,8 +77,10 @@ string replaceAll(std::string str, const std::string &from, const std::string &t
 
 size_t getFilesCount(std::filesystem::path path)
 {
+    std::lock_guard<std::mutex> lock(_listManagerLock);
     using std::filesystem::directory_iterator;
     return std::distance(directory_iterator(path), directory_iterator{});
+    _listManagerLock.unlock();
 }
 
 // LDAP Login
@@ -240,21 +242,40 @@ void handleCommand(int *clientSocket, char buffer[])
     string command = request.substr(0, 5);                  // Getting the command from the request
     vector<string> requestArr = split(request, "\n", NULL); // Vector with each line of the request separate
     string userPath = path + requestArr[1] + "/";           // Sets the path of the users directory
-    int filesCount = 0;
+    string line;
+    int id = 1;
 
     if (command == "SEND\n") // Sends new mail
     {
+
         cout << "[Server][SEND] from user " << requestArr[1] << endl; // Server output
         request.erase(0, 5);                                          // Delete the first 5 characters (the SEND)
 
-        if (!fs::exists(userPath))          // Check if user repository exists
-            fs::create_directory(userPath); // If not create one
-        else
-            filesCount = getFilesCount(userPath) + 1; // Else get the filecount from the users direcotry
+        std::lock_guard<std::mutex> lock(_listManagerLock);
 
-        writefile.open(userPath + "/" + to_string(filesCount) + "_" + replaceAll(requestArr[3], " ", "_") + ".txt", ios_base::out); // Create new File (messagenumber_subject.txt)
-        writefile << request;                                                                                                       // Write to file
-        writefile.close();                                                                                                          // Clos file
+        if (!fs::exists(userPath)) // Check if user repository exists
+        {
+            fs::create_directory(userPath); // If not create one
+            writefile.open(userPath + "id.txt");
+            writefile << "1";
+            writefile.close();
+        }
+        else
+        {
+            readfile.open(userPath + "id.txt");
+            getline(readfile, line); // Else get the filecount from the users direcotry
+            id = std::stoi(line);
+        }
+
+        writefile.open(userPath + "/" + to_string(id) + "_" + replaceAll(requestArr[3], " ", "_") + ".txt", ios_base::out); // Create new File (messagenumber_subject.txt)
+        writefile << request;                                                                                               // Write to file
+        writefile.close();                                                                                                  // Clos file
+
+        writefile.open(userPath + "id.txt");
+        writefile << ++id;
+        writefile.close();
+
+        
 
         strcpy(buffer, "");                             // Reset buffer
         strcpy(buffer, "OK\n");                         // Write to buffer
@@ -274,14 +295,17 @@ void handleCommand(int *clientSocket, char buffer[])
 
         if (fs::exists(userPath)) // Check if uer directory exists
         {
-            filesCount = getFilesCount(userPath);
+            int filesCount = getFilesCount(userPath) - 1;
             for (const auto &file : fs::directory_iterator(userPath)) // Interate through the directory
             {
-                tmpPath = file.path();                             // Gets the whole path
-                tmpPath.erase(0, userPath.length());               // Gets the filename
-                tmpPath.resize(tmpPath.length() - 4);              // Gets rid of the .txt
-                nameArr = split(tmpPath, "_", 1);                  // Spliting the filename on '_' only once
-                message += nameArr[0] + " | " + nameArr[1] + "\n"; // Builds the message
+                tmpPath = file.path(); // Gets the whole path
+                if (tmpPath != userPath + "id.txt")
+                {
+                    tmpPath.erase(0, userPath.length());               // Gets the filename
+                    tmpPath.resize(tmpPath.length() - 4);              // Gets rid of the .txt
+                    nameArr = split(tmpPath, "_", 1);                  // Spliting the filename on '_' only once
+                    message += nameArr[0] + " | " + nameArr[1] + "\n"; // Builds the message
+                }
             }
 
             string countStr = "\nCOUNT: " + to_string(filesCount) + "\n"; // Build the first line of the response (count)
@@ -300,7 +324,7 @@ void handleCommand(int *clientSocket, char buffer[])
     else if (command == "READ\n") // Reads a email (mail number)
     {
         vector<string> pathArr;
-        string message, tmpPath, line;
+        string message, tmpPath;
         size_t found;
         int lineIndex = 1;
         cout << "[Server][READ] from user " << requestArr[1] << endl;
@@ -408,7 +432,6 @@ void handleClient(int clientSocket, string clientIp)
         size = recv(clientSocket, buffer, BUF, 0);
         if (size > 0)
         {
-            cout << buffer << endl;
             if (!loggedIn)
             {
                 loggedIn = HandleLogin(buffer);
@@ -424,6 +447,10 @@ void handleClient(int clientSocket, string clientIp)
                     strcpy(buffer, "ERR\n");
                     send(clientSocket, buffer, strlen(buffer), 0);
                 }
+            }
+            else
+            {
+                handleCommand(&clientSocket, buffer);
             }
         }
         else if (size == 0)
@@ -513,10 +540,12 @@ int main(int argc, char **argv)
         strcpy(buffer, message.c_str());               // Fill the buffer with the welcome message
         send(clientSocket, buffer, strlen(buffer), 0); // Send the welcome message to the client
 
-        memset(buffer, 0, sizeof(buffer));    // Reset the buffer
-        handleClient(clientSocket, clientIp); // Replace with tread
+        memset(buffer, 0, sizeof(buffer)); // Reset the buffer
+
+        threads.push_back(std::thread(handleClient, clientSocket, clientIp));
 
         clientSocket = 0;
+        clientIp = "";
     }
 
     // free(&listeningSocket);
