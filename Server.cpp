@@ -527,7 +527,7 @@ void handleClient(int clientSocket, string clientIp)
                 else
                 {
                     memset(buffer, 0, sizeof(buffer)); // Rest buffer
-                    strcpy(buffer, "ERR2\n");
+                    strcpy(buffer, "BLOCK\n");
                     send(clientSocket, buffer, strlen(buffer), 0);
                     break;
                 }

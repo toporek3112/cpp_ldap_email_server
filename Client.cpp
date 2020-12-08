@@ -222,7 +222,7 @@ int main(int argc, char **argv)
             std::cout << "login failed try again, attempts left: " << i - 1 << endl;
             continue;
         }
-        else if (username == "ERR2\n")
+        else if (username == "BLOCK\n")
         {
             std::cout << "User has been locked due to many attempts while logging in. Try again later :)" << endl;
             exit(EXIT_SUCCESS);
