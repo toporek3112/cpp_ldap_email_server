@@ -1,3 +1,5 @@
+./Users/*
+
 # Prerequisites
 *.d
 
@@ -21,7 +23,7 @@
 *.smod
 
 # Compiled Static libraries
-*.lai
+*.lai               
 *.la
 *.a
 *.lib
@@ -30,7 +32,3 @@
 *.exe
 *.out
 *.app
-
-./Server
-./Client
-./Users/*

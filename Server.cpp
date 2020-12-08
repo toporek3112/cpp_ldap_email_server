@@ -18,7 +18,6 @@
 namespace fs = std::filesystem;
 using namespace std;
 
-#define PORT 5000
 #define LDAP_URI "ldap://ldap.technikum-wien.at:389"
 #define SEARCHBASE "dc=technikum-wien,dc=at"
 #define SCOPE LDAP_SCOPE_SUBTREE
@@ -27,6 +26,7 @@ using namespace std;
 #define BIND_PW ""
 
 #define BUF 1024
+#define LOCKTIME 300
 
 std::mutex _listManagerLock;
 std::vector<std::thread> threads;
@@ -232,6 +232,89 @@ bool HandleLogin(string credentials)
     return false;
 }
 
+// User management
+
+void lockUser(string clientIp)
+{
+    {
+        std::lock_guard<std::mutex> lock(_listManagerLock);
+        ofstream writeStream;
+        string path = "./Black_List/";
+
+        if (!fs::exists(path))
+            fs::create_directory(path);
+
+        time_t t = time(0);
+        string tstamp = to_string(t + LOCKTIME);
+
+        if (!fs::exists(path + clientIp + ".txt"))
+        {
+            writeStream.open(path + clientIp + ".txt");
+            writeStream << tstamp;
+            writeStream.close();
+        }
+        else
+        {
+            writeStream.open(path + clientIp + ".txt", fstream::out);
+            writeStream << tstamp;
+            writeStream.close();
+        }
+
+        _listManagerLock.unlock();
+    }
+}
+
+void unlockUser(string clientIp)
+{
+    {
+        std::lock_guard<std::mutex> lock(_listManagerLock);
+        string path = "./Black_List/";
+
+        fs::remove(path + clientIp + ".txt");
+
+        _listManagerLock.unlock();
+    }
+}
+
+bool checkUserNotLocked(string clientIp)
+{
+    {
+        int lockTime;
+        string path = "./Black_List/";
+
+        try
+        {
+            std::lock_guard<std::mutex> lock(_listManagerLock);
+
+            if (!fs::exists(path))
+                fs::create_directory(path);
+
+            if (fs::exists(path + clientIp + ".txt"))
+            {
+                ifstream readStream;
+                readStream.open(path + clientIp + ".txt");
+                readStream >> lockTime;
+                readStream.close();
+            }
+            _listManagerLock.unlock();
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << e.what() << '\n';
+            return true;
+        }
+
+        time_t t = time(0);
+
+        if (lockTime < t)
+        {
+            return true;
+        }
+
+        return false;
+    }
+}
+
 // Server commands
 void handleCommand(int *clientSocket, char buffer[])
 {
@@ -275,8 +358,6 @@ void handleCommand(int *clientSocket, char buffer[])
         writefile << ++id;
         writefile.close();
 
-        
-
         strcpy(buffer, "");                             // Reset buffer
         strcpy(buffer, "OK\n");                         // Write to buffer
         send(*clientSocket, buffer, strlen(buffer), 0); // Send response to client
@@ -293,7 +374,7 @@ void handleCommand(int *clientSocket, char buffer[])
 
         cout << "[Server][LIST] from user " << requestArr[1] << endl;
 
-        if (fs::exists(userPath)) // Check if uer directory exists
+        if (fs::exists(userPath)) // Check if user directory exists
         {
             int filesCount = getFilesCount(userPath) - 1;
             for (const auto &file : fs::directory_iterator(userPath)) // Interate through the directory
@@ -425,6 +506,7 @@ void handleClient(int clientSocket, string clientIp)
     string request;
     char buffer[BUF];
     int size;
+    int tries = 0;
     bool loggedIn = false;
 
     do
@@ -434,6 +516,19 @@ void handleClient(int clientSocket, string clientIp)
         {
             if (!loggedIn)
             {
+
+                if (checkUserNotLocked(clientIp))
+                {
+                    unlockUser(clientIp);
+                }
+                else
+                {
+                    memset(buffer, 0, sizeof(buffer)); // Rest buffer
+                    strcpy(buffer, "ERR2\n");
+                    send(clientSocket, buffer, strlen(buffer), 0);
+                    break;
+                }
+
                 loggedIn = HandleLogin(buffer);
 
                 memset(buffer, 0, sizeof(buffer)); // Rest buffer
@@ -444,6 +539,14 @@ void handleClient(int clientSocket, string clientIp)
                 }
                 else
                 {
+                    tries++;
+                    if (tries == 3)
+                    {
+                        cout << "[Server] User:" << clientIp << " has been locked" << endl;
+                        lockUser(clientIp);
+                        break;
+                    }
+
                     strcpy(buffer, "ERR\n");
                     send(clientSocket, buffer, strlen(buffer), 0);
                 }
@@ -474,6 +577,23 @@ int main(int argc, char **argv)
 {
     printf("Server is starting... \n");
 
+    try
+    {
+        if (std::stoi(argv[1]) < 5000 || argv[2] == "")
+        {
+            cout << "\nERROR: Please select a portnumber thats higher than 4999" << endl;
+            cout << "The right way to start this server:\n"
+                 << endl;
+            cout << "./Server [PORT]\n"
+                 << endl;
+            exit(EXIT_FAILURE);
+        }
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << e.what() << '\n';
+    }
+
     // Variables
     int listeningSocket, clientSocket;
     int opt = 1;
@@ -497,9 +617,9 @@ int main(int argc, char **argv)
     }
 
     // Bind the ip address and port to a socket
-    listeningSocketAddress.sin_family = AF_INET;                // Set address family (IPv4)
-    listeningSocketAddress.sin_addr.s_addr = htonl(INADDR_ANY); // Set any ip address
-    listeningSocketAddress.sin_port = htons(PORT);              // Set port to use (network byte order)
+    listeningSocketAddress.sin_family = AF_INET;                 // Set address family (IPv4)
+    listeningSocketAddress.sin_addr.s_addr = htonl(INADDR_ANY);  // Set any ip address
+    listeningSocketAddress.sin_port = htons(std::stoi(argv[1])); // Set port to use (network byte order)
 
     if (bind(listeningSocket, (sockaddr *)&listeningSocketAddress, sizeof(listeningSocketAddress)) == -1) // Bind socket do address
     {
@@ -533,9 +653,7 @@ int main(int argc, char **argv)
 
         printf("[Server][Connection Accepted] Client connected from %s:%d... \n", inet_ntoa(clientAddress.sin_addr), ntohs(clientAddress.sin_port));
 
-        clientIp += inet_ntoa(clientAddress.sin_addr);        // Get the clientIp
-        clientIp += ":";                                      // Seperator
-        clientIp += to_string(ntohs(clientAddress.sin_port)); // Get the client port
+        clientIp += inet_ntoa(clientAddress.sin_addr); // Get the clientIp
 
         strcpy(buffer, message.c_str());               // Fill the buffer with the welcome message
         send(clientSocket, buffer, strlen(buffer), 0); // Send the welcome message to the client

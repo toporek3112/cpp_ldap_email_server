@@ -79,20 +79,97 @@ string LDAPLogin(int *clientSocket)
         }
         else
         {
-            std::cout << "Login unsuccessful!\n"
+            std::cout << "Login failed!\n"
                       << endl;
-            return "ERR";
+            return response;
         }
     }
 }
 
+bool isValidIpAddress(char *st)
+{
+    int num, i, len;
+    char *ch;
+
+    //counting number of quads present in a given IP address
+    int quadsCnt = 0;
+
+    len = strlen(st);
+
+    //  Check if the string is valid
+    if (len < 7 || len > 15)
+        return false;
+
+    ch = strtok(st, ".");
+
+    while (ch != NULL)
+    {
+        quadsCnt++;
+
+        num = 0;
+        i = 0;
+
+        //  Get the current token and convert to an integer value
+        while (ch[i] != '\0')
+        {
+            num = num * 10;
+            num = num + (ch[i] - '0');
+            i++;
+        }
+
+        if (num < 0 || num > 255)
+        {
+            return false;
+        }
+
+        if ((quadsCnt == 1 && num == 0) || (quadsCnt == 4 && num == 0))
+        {
+            return false;
+        }
+
+        ch = strtok(NULL, ".");
+    }
+
+    //  Check the address string, should be n.n.n.n format
+    if (quadsCnt != 4)
+    {
+        return false;
+    }
+
+    //  Looks like a valid IP address
+    return true;
+}
+
 int main(int argc, char **argv)
 {
+    try
+    {
+        if (!isValidIpAddress(argv[1]) || argv[1] == "")
+        {
+            cout << "\nERROR: " << argv[0] << " is not a valid IP address or is not set" << endl;
+            cout << "The right way to start this client:\n" << endl;
+            cout << "./Client [IPADDRESS] [PORT]\n" << endl;
+            exit(EXIT_FAILURE);
+        }
+        if (std::stoi(argv[2]) < 5000 || argv[2] == "")
+        {
+            cout << "\nERROR: Please select a portnumber thats higher than 4999" << endl;
+            cout << "The right way to start this client:\n" << endl;
+            cout << "./Client [IPADDRESS] [PORT]\n" << endl;
+            exit(EXIT_FAILURE);
+        }
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << e.what() << '\n';
+    }
+
     int clientSocket, size;
     char buffer[BUF];
     sockaddr_in serverAddress;
 
-    string input, message, username;;
+    string input, message, username;
+    ;
 
     // Create a socket
     if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) == -1)
@@ -104,7 +181,7 @@ int main(int argc, char **argv)
     // Bind the ip address and port to a socket
     serverAddress.sin_family = AF_INET;                     // Set address family (IPv4)
     serverAddress.sin_addr.s_addr = inet_addr("127.0.0.1"); // Set IP address (localhost)
-    serverAddress.sin_port = htons(PORT);                   // Set port to use (network byte order)
+    serverAddress.sin_port = htons(std::stoi(argv[2]));                   // Set port to use (network byte order)
 
     // Connect
     {
@@ -134,7 +211,7 @@ int main(int argc, char **argv)
     for (size_t i = 3; i > 0; i--)
     {
         username = LDAPLogin(&clientSocket);
-        if (username == "ERR")
+        if (username == "ERR\n")
         {
             if (i == 1)
             {
@@ -145,11 +222,15 @@ int main(int argc, char **argv)
             std::cout << "login failed try again, attempts left: " << i - 1 << endl;
             continue;
         }
+        else if (username == "ERR2\n")
+        {
+            std::cout << "User has been locked due to many attempts while logging in. Try again later :)" << endl;
+            exit(EXIT_SUCCESS);
+        }
         break;
     }
 
     string commands = "----------------------------------------\n";
-    commands += "Commands you can use:\n";
     commands += "SEND          Send a new email to someone\n";
     commands += "LIST          List all your emails\n";
     commands += "READ          Read a certain email\n";
@@ -157,7 +238,6 @@ int main(int argc, char **argv)
     commands += "QUIT          Pretty selfexplaining...\n";
 
     cout << commands << endl;
-
 
     // reading and sending commands in while loop
     while (true)
@@ -174,7 +254,7 @@ int main(int argc, char **argv)
         if (message == "QUIT")
             break;
         if (message == "HELP")
-            cout << commands << endl;      
+            cout << commands << endl;
         else if (message == "SEND") // Send Command
         {
             // Building Message

@@ -8,4 +8,4 @@ client: Client.cpp
 	g++-9 -std=c++2a -Wall -pthread -g Client.cpp -o Client -lldap -llber
 
 clean:
-	rm Server Client
+	rm -rf Server Client Users/ Black_List/
