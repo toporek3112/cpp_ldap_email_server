@@ -328,6 +328,9 @@ void handleCommand(int *clientSocket, char buffer[])
     string line;
     int id = 1;
 
+    if (!fs::exists(userPath)) // Check if user repository exists
+        fs::create_directory(path);
+
     if (command == "SEND\n") // Sends new mail
     {
 
