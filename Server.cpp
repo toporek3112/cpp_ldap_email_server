@@ -79,14 +79,14 @@ size_t getFilesCount(std::filesystem::path path)
 {
     std::lock_guard<std::mutex> lock(_listManagerLock);
     using std::filesystem::directory_iterator;
-    return std::distance(directory_iterator(path), directory_iterator{});
     _listManagerLock.unlock();
+    return std::distance(directory_iterator(path), directory_iterator{});
 }
 
 // LDAP Login
 bool HandleLogin(string credentials)
 {
-    vector<string> messElements = split(credentials, "\n", NULL);
+    vector<string> messElements = split(credentials, "\n", 0);
 
     LDAP *ld, *ld2;          /* LDAP resource handle */
     LDAPMessage *result, *e; /* LDAP result handle */
@@ -323,12 +323,12 @@ void handleCommand(int *clientSocket, char buffer[])
     string path = "./Users/";                               // Default user directory path
     string request(buffer);                                 // Buffer to string
     string command = request.substr(0, 5);                  // Getting the command from the request
-    vector<string> requestArr = split(request, "\n", NULL); // Vector with each line of the request separate
+    vector<string> requestArr = split(request, "\n", 0); // Vector with each line of the request separate
     string userPath = path + requestArr[1] + "/";           // Sets the path of the users directory
     string line;
     int id = 1;
 
-    if (!fs::exists(userPath)) // Check if user repository exists
+    if (!fs::exists(path)) // Check if user repository exists
         fs::create_directory(path);
 
     if (command == "SEND\n") // Sends new mail
@@ -418,7 +418,7 @@ void handleCommand(int *clientSocket, char buffer[])
             for (const auto &file : fs::directory_iterator(userPath)) // Interate through the directory
             {
                 tmpPath = file.path();                  // Gets the whole path
-                pathArr = split(tmpPath, "/", NULL);    // Splits the path on '/'
+                pathArr = split(tmpPath, "/", 0);    // Splits the path on '/'
                 found = pathArr[3].find(requestArr[2]); // Searchers for the message number in the filname
 
                 if (found != string::npos && found == 0) // Checks if message number was found and if it is on the first position
@@ -463,7 +463,6 @@ void handleCommand(int *clientSocket, char buffer[])
         string tmpPath, line;
         size_t found;
         bool removed = false;
-        int lineIndex = 1;
         cout << "[Server][DEL] from user " << requestArr[1] << endl;
 
         if (fs::exists(userPath)) // Check if uer directory exists
@@ -471,7 +470,7 @@ void handleCommand(int *clientSocket, char buffer[])
             for (const auto &file : fs::directory_iterator(userPath)) // Interate through the directory
             {
                 tmpPath = file.path();                  // Gets the whole path
-                pathArr = split(tmpPath, "/", NULL);    // Splits the path on '/'
+                pathArr = split(tmpPath, "/", 0);    // Splits the path on '/'
                 found = pathArr[3].find(requestArr[2]); // Searchers for the message number in the filname
 
                 if (found != string::npos && found == 0) // Checks if message number was found and if it is on the first position
